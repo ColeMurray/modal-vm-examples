@@ -1,0 +1,2 @@
+# Modal VM Sandboxes' filesystem API (sb.filesystem.*) requires modal >= 1.4.0.
+modal>=1.4.0
