@@ -24,30 +24,30 @@ This means this Sandbox has already shut down.
 It is **not** a Docker/network problem — it's *how `dockerd` is launched*. Holding
 everything else identical and varying only the launch method:
 
-| dockerd launch | Result |
+| launch method (everything else identical) | result |
 |---|---|
-| `nohup dockerd &` — the launching `exec` **returns** | sandbox **DIED ~1s later**, `EXIT(124)` |
+| `nohup sleep 600 &` — exec **returns** (a *bare* background process) | sandbox **DIED ~1s**, `EXIT(124)` |
+| `nohup dockerd &` — exec **returns** | sandbox **DIED**, `EXIT(124)` |
 | `exec dockerd` — held in a **foreground exec, never waited** | **SURVIVED**, docker ready |
 
-The death happens ~1s **after** the launching exec returns.
+The death happens ~1s **after** the launching exec returns — and note it happens
+even for a bare `sleep`, so this is not a Docker problem.
 
 ### Why
 
 A Modal VM Sandbox is a long-lived VM whose PID 1 is Modal's agent (`runch-agent`).
-Each `sb.exec()` is a *transient* child process tree that Modal tracks and reaps
-when it finishes (like `docker exec`). A backgrounded daemon is still part of that
-exec's tree (`nohup` only ignores `SIGHUP`; `&` doesn't move it out of the exec's
-process group in a non-interactive shell). So when the launching exec returns:
+Each `sb.exec()` is a *transient* process tree that Modal tears down when the exec
+returns (like `docker exec`). A backgrounded process is still part of that exec's
+tree (`nohup` only ignores `SIGHUP`; `&` doesn't move it out of the exec's process
+group in a non-interactive shell). So if you background a process and let the
+launching exec return, the exec finishes **with a still-running child** — and
+tearing down that exec's scope takes the **whole sandbox** with it (`poll()` → 124,
+~1s later).
 
-1. Modal reaps that exec's process tree → kills the backgrounded `dockerd` +
-   `containerd`.
-2. They were mid-flight reorganizing the VM (cgroups, network namespaces/bridges,
-   mounts). Getting reaped at that instant disrupts the VM enough that the agent
-   loses its heartbeat to Modal's control plane.
-3. Modal terminates the VM — surfaced as exit **124** ("already shut down").
-
-Holding `dockerd` in a foreground `exec` you never wait on means the exec never
-"finishes", so nothing is reaped.
+This is **general, not a Docker problem**: it reproduces with a bare
+`nohup sleep 600 &` just as readily as with `dockerd`. Holding the process in a
+foreground `exec` you never wait on means the exec never "finishes", so nothing is
+torn down.
 
 > The precise reaping scope (process-group vs cgroup) wasn't fully isolated, but it
 > doesn't change the fix.
